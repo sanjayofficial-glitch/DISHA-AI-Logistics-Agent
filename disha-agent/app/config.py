@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     # --- Supabase (optional; SQLite demo store when absent) ---------------
     supabase_url: str | None = None
     supabase_anon_key: str | None = None
+
+    # --- Persistence store selector --------------------------------------
+    # Explicitly pin the store. "demo" (default) always uses SQLite, even if
+    # Supabase env vars are present; "supabase" requires URL + anon key and
+    # forwards the caller's JWT. Prevents silent store switching.
+    store: Literal["demo", "supabase"] = Field(default="demo", validation_alias="DISHA_STORE")
 
     # --- Auth — Clerk->Supabase JWT contract ------------------------------
     # SUPABASE_JWT_SECRET signs the HS256 JWTs. In demo mode (development +
@@ -67,6 +73,9 @@ class Settings(BaseSettings):
     # Provider timeout / retry
     provider_timeout_s: float = 20.0
     provider_retries: int = 1
+
+    # --- Approval lifecycle ------------------------------------------------
+    approval_expires_minutes: int = 1440  # pending approvals expire after 24h
 
     @model_validator(mode="after")
     def _production_auth_required(self):

@@ -7,6 +7,7 @@ Ownership model:
 """
 from __future__ import annotations
 
+import datetime as dt
 import uuid
 
 from . import events as events_mod
@@ -14,6 +15,22 @@ from .config import settings
 from .context import clear_request_context, set_request_context
 from .graph import create_graph
 from .providers import ProviderError
+
+
+def _approval_expired(pending_action: dict) -> bool:
+    """True when the pending action is older than approval_expires_minutes.
+    Unparseable timestamps are treated as not expired (safe default)."""
+    raw = pending_action.get("created_at")
+    if not raw:
+        return False
+    try:
+        created = dt.datetime.fromisoformat(raw)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=dt.timezone.utc)
+        age = dt.datetime.now(dt.timezone.utc) - created
+        return age > dt.timedelta(minutes=settings.approval_expires_minutes)
+    except (ValueError, TypeError):
+        return False
 
 
 class AgentService:
@@ -71,8 +88,24 @@ class AgentService:
         owner = state.values.get("user_id")
         if owner != user_id:
             return {"error": "forbidden: not your thread", "status": "forbidden"}
-        if not state.values.get("pending_action"):
+        pa = state.values.get("pending_action")
+        if not pa:
             return {"error": "nothing to approve", "status": "error"}
+        if _approval_expired(pa):
+            graph.update_state(
+                self._config(thread_id),
+                {
+                    "approval_required": False,
+                    "pending_action": None,
+                    "status": "done",
+                    "reply": "Approval expired — nothing was written. Please ask Disha again.",
+                },
+            )
+            self._events.append(thread_id, user_id, "coordinate", "expired",
+                                "approval expired before approval")
+            return {"thread_id": thread_id, "status": "expired",
+                    "reply": "Approval expired — nothing was written.",
+                    "approval_required": False, "pending_action": None}
         set_request_context(user_id, token)
         try:
             result = graph.invoke(None, self._config(thread_id))

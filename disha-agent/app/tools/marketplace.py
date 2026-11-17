@@ -108,7 +108,14 @@ class AcceptOfferArgs(BaseModel):
 
 
 def _accept_offer(store, args: dict) -> dict:
-    row = store.accept_offer(args["offer_id"].strip().upper())
+    """Accept an offer — only by the transporter who owns it."""
+    offer_id = args["offer_id"].strip().upper()
+    offer = store.get_offer(offer_id)
+    if not offer:
+        raise ValueError("offer not found")
+    if offer.get("transporter_user_id") != current_user_id():
+        raise ValueError("forbidden: you can only accept your own offers")
+    row = store.accept_offer(offer_id)
     return {"offer_id": row["id"], "status": row["status"], "row": row}
 
 
@@ -117,7 +124,18 @@ class ConfirmRequestArgs(BaseModel):
 
 
 def _confirm_request(store, args: dict) -> dict:
-    row = store.confirm_request(args["request_id"].strip().upper())
+    """Confirm a request — only by the shipper who owns it, and only when
+    at least one offer on the request has been accepted."""
+    request_id = args["request_id"].strip().upper()
+    req = store.get_request(request_id)
+    if not req:
+        raise ValueError("request not found")
+    if req.get("shipper_user_id") != current_user_id():
+        raise ValueError("forbidden: you can only confirm your own requests")
+    offers = store.get_offers_for_request(request_id)
+    if not any(o.get("status") == "accepted" for o in offers):
+        raise ValueError("cannot confirm: no accepted offer on this request yet")
+    row = store.confirm_request(request_id)
     return {"request_id": row["id"], "status": row["status"], "row": row}
 
 

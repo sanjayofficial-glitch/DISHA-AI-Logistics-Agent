@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { chat, approve, myOffers, truckerShipments, Shipment, Offer, ApiError } from "../lib/api";
+import { chat, approve, reject, myOffers, truckerShipments, Shipment, Offer, PendingAction, ApiError } from "../lib/api";
 import { DemoBadge } from "./DemoBadge";
+import { ApprovalCard } from "./ChatView";
 import { Loader2, Send } from "lucide-react";
 
 export function TruckerPortal() {
@@ -10,6 +11,7 @@ export function TruckerPortal() {
   const [error, setError] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState<string | null>(null);
   const [prices, setPrices] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState<{ action: PendingAction; threadId: string } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -28,14 +30,14 @@ export function TruckerPortal() {
   async function sendOffer(s: Shipment) {
     setBusy(true);
     setError(null);
+    setPending(null);
     try {
       const price = prices[s.id]?.trim();
       const msg = `send offer for ${s.id}${price ? ` at ${price}` : ""}`;
       const { done } = await chat(msg);
       if (done.status === "approval_required" && done.pending_action) {
-        setStatusLine(`Approval required: ${done.pending_action.summary}`);
-        const res = await approve(done.thread_id);
-        setStatusLine(res.reply);
+        setStatusLine("Approval required — review the action below.");
+        setPending({ action: done.pending_action, threadId: done.thread_id });
       } else {
         setStatusLine(done.reply ?? "Offer sent.");
       }
@@ -50,15 +52,38 @@ export function TruckerPortal() {
   async function acceptOffer(o: Offer) {
     setBusy(true);
     setError(null);
+    setPending(null);
     try {
       const { done } = await chat(`accept offer ${o.id}`);
       if (done.status === "approval_required" && done.pending_action) {
-        const res = await approve(done.thread_id);
-        setStatusLine(res.reply);
+        setStatusLine("Approval required — review the action below.");
+        setPending({ action: done.pending_action, threadId: done.thread_id });
+      } else {
+        setStatusLine(done.reply ?? "Offer processed.");
       }
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "accept failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveApproval(doApprove: boolean) {
+    if (!pending) return;
+    setBusy(true);
+    try {
+      if (doApprove) {
+        const res = await approve(pending.threadId);
+        setStatusLine(res.reply);
+      } else {
+        await reject(pending.threadId);
+        setStatusLine("Rejected — nothing was written.");
+      }
+      setPending(null);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "approval failed");
     } finally {
       setBusy(false);
     }
@@ -75,6 +100,18 @@ export function TruckerPortal() {
         {error && <div className="text-xs text-red-400 mb-3">{error}</div>}
         {statusLine && (
           <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 mb-3">{statusLine}</div>
+        )}
+        {pending && (
+          <div className="mb-3">
+            <ApprovalCard
+              action={pending.action}
+              threadId={pending.threadId}
+              busy={busy}
+              onApprove={() => resolveApproval(true)}
+              onReject={() => resolveApproval(false)}
+              onSpeak={() => {}}
+            />
+          </div>
         )}
         <div className="space-y-3 max-h-[560px] overflow-y-auto pr-1">
           {shipments.length === 0 && <div className="text-sm text-slate-500">No pending loads right now.</div>}

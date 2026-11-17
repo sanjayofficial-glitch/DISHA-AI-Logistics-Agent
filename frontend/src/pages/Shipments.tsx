@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { myRequests, MarketplaceRequest, truckerShipments, Shipment, chat, approve, ApiError } from "../lib/api";
+import { myRequests, MarketplaceRequest, truckerShipments, Shipment, chat, approve, reject, PendingAction, ApiError } from "../lib/api";
 import { PageHeader, Card, Badge, EmptyState } from "../ui/primitives";
+import { ApprovalCard } from "../components/ChatView";
 import { CheckCircle2, Loader2, Send } from "lucide-react";
 import { useAuthUser } from "../components/authContext";
 
@@ -12,6 +13,7 @@ export function ShipmentsPage() {
   const [statusLine, setStatusLine] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [prices, setPrices] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState<{ action: PendingAction; threadId: string } | null>(null);
   const isShipper = user.role === "shipper";
 
   const refresh = useCallback(async () => {
@@ -33,11 +35,14 @@ export function ShipmentsPage() {
 
   async function confirmRequest(id: string) {
     setBusy(true);
+    setPending(null);
     try {
       const { done } = await chat(`confirm request ${id}`);
       if (done.status === "approval_required" && done.pending_action) {
-        const res = await approve(done.thread_id);
-        setStatusLine(res.reply);
+        setStatusLine("Approval required — review the action below.");
+        setPending({ action: done.pending_action, threadId: done.thread_id });
+      } else {
+        setStatusLine(done.reply ?? "Request processed.");
       }
       await refresh();
     } catch (e) {
@@ -49,12 +54,13 @@ export function ShipmentsPage() {
 
   async function sendOffer(s: Shipment) {
     setBusy(true);
+    setPending(null);
     try {
       const price = prices[s.id]?.trim();
       const { done } = await chat(`send offer for ${s.id}${price ? ` at ${price}` : ""}`);
       if (done.status === "approval_required" && done.pending_action) {
-        const res = await approve(done.thread_id);
-        setStatusLine(res.reply);
+        setStatusLine("Approval required — review the action below.");
+        setPending({ action: done.pending_action, threadId: done.thread_id });
       } else {
         setStatusLine(done.reply ?? "Offer sent.");
       }
@@ -66,12 +72,44 @@ export function ShipmentsPage() {
     }
   }
 
+  async function resolveApproval(doApprove: boolean) {
+    if (!pending) return;
+    setBusy(true);
+    try {
+      if (doApprove) {
+        const res = await approve(pending.threadId);
+        setStatusLine(res.reply);
+      } else {
+        await reject(pending.threadId);
+        setStatusLine("Rejected — nothing was written.");
+      }
+      setPending(null);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "approval failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (isShipper) {
     return (
       <div>
         <PageHeader title="Shipments" subtitle="Your requests and their journey status." />
         {statusLine && <div className="mb-4 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{statusLine}</div>}
         {error && <div className="mb-4 text-xs text-red-500">{error}</div>}
+        {pending && (
+          <div className="mb-4">
+            <ApprovalCard
+              action={pending.action}
+              threadId={pending.threadId}
+              busy={busy}
+              onApprove={() => resolveApproval(true)}
+              onReject={() => resolveApproval(false)}
+              onSpeak={() => {}}
+            />
+          </div>
+        )}
         <Card>
           {requests.length === 0 ? (
             <EmptyState title="No requests yet" hint="Create one in the Shipper flow or ask Disha." />
@@ -116,6 +154,18 @@ export function ShipmentsPage() {
       <PageHeader title="Shipments" subtitle="Pending loads available on the demo marketplace." />
       {statusLine && <div className="mb-4 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{statusLine}</div>}
       {error && <div className="mb-4 text-xs text-red-500">{error}</div>}
+      {pending && (
+        <div className="mb-4">
+          <ApprovalCard
+            action={pending.action}
+            threadId={pending.threadId}
+            busy={busy}
+            onApprove={() => resolveApproval(true)}
+            onReject={() => resolveApproval(false)}
+            onSpeak={() => {}}
+          />
+        </div>
+      )}
       <Card>
         {shipments.length === 0 ? (
           <EmptyState title="No pending loads" hint="Check back later — demo shipments appear on the Rourkela–Ranchi corridor." />

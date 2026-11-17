@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { chat, approve, myRequests, MarketplaceRequest, ApiError } from "../lib/api";
+import { chat, approve, reject, myRequests, MarketplaceRequest, PendingAction, ApiError } from "../lib/api";
 import { DemoBadge } from "./DemoBadge";
+import { ApprovalCard } from "./ChatView";
 import { Loader2, Send, CheckCircle2 } from "lucide-react";
 
 interface FormState {
@@ -21,6 +22,7 @@ export function ShipperPortal() {
   const [busy, setBusy] = useState(false);
   const [statusLine, setStatusLine] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<{ action: PendingAction; threadId: string } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -42,6 +44,7 @@ export function ShipperPortal() {
     setBusy(true);
     setError(null);
     setStatusLine(null);
+    setPending(null);
     const msg =
       `Create a request: from ${form.origin} to ${form.destination}, ` +
       `${form.weight} tonnes, ${form.goods || "goods"}${form.vehicle ? ", " + form.vehicle : ""}, ` +
@@ -49,9 +52,8 @@ export function ShipperPortal() {
     try {
       const { done } = await chat(msg);
       if (done.status === "approval_required" && done.pending_action) {
-        setStatusLine(`Approval required: ${done.pending_action.summary}`);
-        const res = await approve(done.thread_id);
-        setStatusLine(res.reply);
+        setStatusLine("Approval required — review the action below.");
+        setPending({ action: done.pending_action, threadId: done.thread_id });
       } else if (done.status === "needs_input") {
         setStatusLine(`Disha needs more detail: ${done.reply ?? ""}`);
       } else {
@@ -75,15 +77,38 @@ export function ShipperPortal() {
   async function confirmRequest(id: string) {
     setBusy(true);
     setError(null);
+    setPending(null);
     try {
       const { done } = await chat(`confirm request ${id}`);
       if (done.status === "approval_required" && done.pending_action) {
-        const res = await approve(done.thread_id);
-        setStatusLine(res.reply);
+        setStatusLine("Approval required — review the action below.");
+        setPending({ action: done.pending_action, threadId: done.thread_id });
+      } else {
+        setStatusLine(done.reply ?? "Request processed.");
       }
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "confirmation failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveApproval(doApprove: boolean) {
+    if (!pending) return;
+    setBusy(true);
+    try {
+      if (doApprove) {
+        const res = await approve(pending.threadId);
+        setStatusLine(res.reply);
+      } else {
+        await reject(pending.threadId);
+        setStatusLine("Rejected — nothing was written.");
+      }
+      setPending(null);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "approval failed");
     } finally {
       setBusy(false);
     }
@@ -140,6 +165,18 @@ export function ShipperPortal() {
         </div>
         {error && <div className="text-xs text-red-400">{error}</div>}
         {statusLine && <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">{statusLine}</div>}
+        {pending && (
+          <div className="mt-3">
+            <ApprovalCard
+              action={pending.action}
+              threadId={pending.threadId}
+              busy={busy}
+              onApprove={() => resolveApproval(true)}
+              onReject={() => resolveApproval(false)}
+              onSpeak={() => {}}
+            />
+          </div>
+        )}
         <button
           onClick={submit}
           disabled={busy || !form.origin || !form.destination || !form.weight}

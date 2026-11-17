@@ -14,6 +14,7 @@ Both implement the same query/write contract so switching is a .env change.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import sqlite3
 import uuid
 from pathlib import Path
@@ -557,11 +558,27 @@ class SupabaseStore:
 
 
 def get_store(user_token: str | None = None) -> MarketplaceStore:
-    """Return the active store. With a configured Supabase project, every
-    call passes the caller's JWT; otherwise the SQLite demo store is used."""
-    if settings.supabase_url and settings.supabase_anon_key:
+    """Return the active store.
+
+    Store selection is explicit: `settings.store` is "supabase" only when
+    DISHA_STORE=supabase is set (with SUPABASE_URL + SUPABASE_ANON_KEY).
+    Default is the isolated SQLite demo store; Supabase env vars alone no
+    longer switch the store silently.
+    """
+    if settings.store == "supabase":
+        if not (settings.supabase_url and settings.supabase_anon_key):
+            raise ValueError(
+                "DISHA_STORE=supabase requires SUPABASE_URL and "
+                "SUPABASE_ANON_KEY"
+            )
         if not user_token:
-            from .auth import verify_token
+            from .auth import verify_token  # noqa: F401
             raise ValueError("user token required for Supabase store")
         return SupabaseStore(settings.supabase_url, settings.supabase_anon_key, user_token)
+    if settings.supabase_url and settings.supabase_anon_key:
+        logging.getLogger(__name__).warning(
+            "Supabase credentials are set but DISHA_STORE is 'demo' — "
+            "using the isolated SQLite demo store. Set DISHA_STORE=supabase "
+            "to enable Supabase persistence."
+        )
     return SQLiteStore()
