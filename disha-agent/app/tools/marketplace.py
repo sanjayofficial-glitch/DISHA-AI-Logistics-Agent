@@ -139,6 +139,22 @@ def _confirm_request(store, args: dict) -> dict:
     return {"request_id": row["id"], "status": row["status"], "row": row}
 
 
+class CancelRequestArgs(BaseModel):
+    request_id: str = Field(min_length=4, max_length=32)
+
+
+def _cancel_request(store, args: dict) -> dict:
+    """Cancel a request — only by the shipper who owns it (approval-gated)."""
+    request_id = args["request_id"].strip().upper()
+    req = store.get_request(request_id)
+    if not req:
+        raise ValueError("request not found")
+    if req.get("shipper_user_id") != current_user_id():
+        raise ValueError("forbidden: you can only cancel your own requests")
+    row = store.cancel_request(request_id)
+    return {"request_id": row["id"], "status": row["status"], "row": row}
+
+
 class SendNotificationArgs(BaseModel):
     type: str = Field(max_length=50)
     title: str = Field(max_length=200)
@@ -214,6 +230,7 @@ MAKERS = [
     ("send_notification", "Insert a notification row.", SendNotificationArgs, _send_notification, False),
     ("register_vehicle_availability", "Transporter publishes vehicle availability (active trip row).", RegisterVehicleAvailabilityArgs, _register_vehicle_availability, False),
     ("make_counter_offer", "Record a negotiation counter-offer on a request (participants only).", MakeCounterOfferArgs, _make_counter_offer, False),
+    ("cancel_request", "Shipper cancels their own request (pending or confirmed).", CancelRequestArgs, _cancel_request, False),
 ]
 
 for _name, _desc, _schema, _handler, _ro in MAKERS:

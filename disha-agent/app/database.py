@@ -45,6 +45,7 @@ class MarketplaceStore(Protocol):
     def send_notification(self, user_id: str, type_: str, title: str, body: str) -> dict: ...
     def accept_offer(self, offer_id: str) -> dict: ...
     def confirm_request(self, request_id: str) -> dict: ...
+    def cancel_request(self, request_id: str) -> dict: ...
     def get_user_requests(self, user_id: str) -> list[dict]: ...
     def get_user_offers(self, user_id: str) -> list[dict]: ...
     def get_pending_shipments(self) -> list[dict]: ...
@@ -305,6 +306,15 @@ class SQLiteStore:
         self._exec("UPDATE requests SET status='confirmed', confirmed_at=? WHERE id=?", (now, request_id))
         return self.get_request(request_id) or req
 
+    def cancel_request(self, request_id: str) -> dict:
+        req = self.get_request(request_id)
+        if not req:
+            raise KeyError("request not found")
+        if req["status"] not in ("pending", "confirmed"):
+            raise ValueError("only pending or confirmed requests can be cancelled")
+        self._exec("UPDATE requests SET status='cancelled' WHERE id=?", (request_id,))
+        return self.get_request(request_id) or req
+
     def get_user_requests(self, user_id: str) -> list[dict]:
         return self._q("SELECT * FROM requests WHERE shipper_user_id=? ORDER BY created_at DESC", (user_id,))
 
@@ -505,6 +515,11 @@ class SupabaseStore:
 
     def confirm_request(self, request_id: str) -> dict:
         return self._update("requests", request_id, {"status": "confirmed", "confirmed_at": utcnow()})
+
+    def cancel_request(self, request_id: str) -> dict:
+        raise NotImplementedError(
+            "cancel_request: live Supabase path not wired (demo SQLite only)"
+        )
 
     def get_user_requests(self, user_id: str) -> list[dict]:
         return self._rest("requests", {"shipper_user_id": f"eq.{user_id}", "order": "created_at.desc"})

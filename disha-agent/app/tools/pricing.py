@@ -34,6 +34,17 @@ BASE_CHARGE_PER_KM_INR = 28.0
 # Multiplier covering fuel + tolls + route overhead on top of base cost.
 FUEL_TOLL_FACTOR = 1.35
 
+# Vehicle-class factor (relative to a baseline open-body truck).
+VEHICLE_CLASS_FACTOR: dict[str, float] = {
+    "open_body": 1.00,
+    "covered_body": 1.03,
+    "trailer": 1.08,
+}
+
+# Weight-band surcharge (applied above 12 t) — heavier loads cost more to haul.
+WEIGHT_BAND_THRESHOLD_T = 12.0
+WEIGHT_BAND_SURCHARGE = 1.05
+
 # Estimates are rounded to this step (₹) for readability.
 ROUNDING_STEP_INR = 10.0
 
@@ -41,6 +52,8 @@ ASSUMPTIONS = [
     "Demo corridor distance table (synthetic, not real routing)",
     f"Operating cost base ₹{BASE_CHARGE_PER_KM_INR:g}/km (12–16t truck class)",
     f"Fuel + toll + route overhead factor {FUEL_TOLL_FACTOR}",
+    "Vehicle-class factor applied (open body 1.00, covered 1.03, trailer 1.08)",
+    f"Weight-band surcharge {WEIGHT_BAND_SURCHARGE} above {WEIGHT_BAND_THRESHOLD_T:g}t",
     "Single-leg full truckload; no multi-stop or loading/unloading charges",
     "Estimate only — not a verified market quotation",
 ]
@@ -67,9 +80,18 @@ def quote(origin: str, destination: str, weight_tonnes: float,
                        "Cannot estimate — I won't invent a distance."),
         }
 
-    total_raw = BASE_CHARGE_PER_KM_INR * km * FUEL_TOLL_FACTOR
+    total_raw = (
+        BASE_CHARGE_PER_KM_INR
+        * km
+        * FUEL_TOLL_FACTOR
+        * VEHICLE_CLASS_FACTOR.get((vehicle_type or "open_body").strip().lower(), 1.00)
+        * (WEIGHT_BAND_SURCHARGE if weight_tonnes > WEIGHT_BAND_THRESHOLD_T else 1.0)
+    )
     total = round(total_raw / ROUNDING_STEP_INR) * ROUNDING_STEP_INR
     per_tonne = round(total / weight_tonnes, 0)
+
+    vehicle_factor = VEHICLE_CLASS_FACTOR.get((vehicle_type or "open_body").strip().lower(), 1.00)
+    weight_factor = WEIGHT_BAND_SURCHARGE if weight_tonnes > WEIGHT_BAND_THRESHOLD_T else 1.0
 
     return {
         "available": True,
@@ -84,8 +106,11 @@ def quote(origin: str, destination: str, weight_tonnes: float,
             "distance_assumption_km": km,
             "base_charge_per_km_inr": BASE_CHARGE_PER_KM_INR,
             "fuel_toll_factor": FUEL_TOLL_FACTOR,
+            "vehicle_class_factor": vehicle_factor,
+            "weight_band_factor": weight_factor,
             "formula": (f"₹{BASE_CHARGE_PER_KM_INR:g}/km × {km} km × "
-                        f"{FUEL_TOLL_FACTOR} ≈ ₹{total:,.0f}"),
+                        f"{FUEL_TOLL_FACTOR} × vehicle {vehicle_factor} × "
+                        f"weight {weight_factor} ≈ ₹{total:,.0f}"),
         },
         "assumptions": list(ASSUMPTIONS),
         "is_estimate": True,

@@ -370,6 +370,30 @@ export async function negotiations(requestId: string): Promise<NegotiationRow[]>
   return data.negotiations;
 }
 
+export interface PtlResult {
+  feasible: boolean;
+  reason?: string;
+  total_weight_tonnes?: number;
+  capacity_tonnes?: number;
+  utilization?: number;
+  route?: string;
+  distance_estimate_km?: number | null;
+  detour_multiplier?: number;
+  detour_estimate_km?: number | null;
+  cargo_restrictions?: string;
+  alignment?: { first_pickup?: string; last_delivery?: string };
+  is_demo?: boolean;
+  note?: string;
+}
+
+export async function ptlCheck(opts: { trip_id: string; load_ids: string[] }): Promise<PtlResult> {
+  const data = await apiJson<{ ptl: PtlResult }>("/market/ptl", {
+    method: "POST",
+    body: JSON.stringify(opts),
+  });
+  return data.ptl;
+}
+
 export async function notifications(): Promise<NotificationRow[]> {
   return (await apiJson<{ notifications: NotificationRow[] }>("/portal/notifications")).notifications;
 }

@@ -114,6 +114,11 @@ class QuoteBody(BaseModel):
     vehicle_type: Optional[str] = Field(default=None, max_length=50)
 
 
+class PtlBody(BaseModel):
+    trip_id: str = Field(min_length=4, max_length=32)
+    load_ids: list[str] = Field(min_length=2, max_length=5)
+
+
 _STATUS_EXPLAINED = {
     ("request", "pending"): "Pending — waiting for transporter confirmation.",
     ("request", "confirmed"): "Confirmed — booking finalized.",
@@ -325,6 +330,25 @@ def market_stats(user_id: str = Depends(require_user), auth: tuple[str, str] = D
     reqs = store.get_user_requests(user_id)
     stats["my_pending_requests"] = sum(1 for r in reqs if r.get("status") == "pending")
     return stats
+
+
+@app.post("/market/ptl")
+def market_ptl(body: PtlBody, user_id: str = Depends(require_user),
+               auth: tuple[str, str] = Depends(require_token)):
+    """Partial-truckload feasibility assessment (read-only, demo corridor)."""
+    store = get_store(auth[1])
+    from .tools.ptl import evaluate_ptl
+    trip = store.get_trip(body.trip_id.strip().upper())
+    if not trip:
+        raise HTTPException(status_code=404, detail="trip not found")
+    loads = []
+    for lid in body.load_ids:
+        s = store.get_shipment(lid.strip().upper())
+        if not s:
+            raise HTTPException(status_code=404, detail=f"shipment not found: {lid}")
+        loads.append(s)
+    return {"ptl": evaluate_ptl(trip, loads),
+            "is_demo": True, "source": "synthetic_seed_data"}
 
 
 @app.get("/market/trips")

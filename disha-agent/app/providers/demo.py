@@ -141,12 +141,19 @@ def _extract_vehicle(text: str) -> str | None:
 
 
 def _extract_goods(text: str) -> str | None:
-    keywords = ["steel", "cement", "coal", "rice", "wheat", "iron", "pipe",
-                "machinery", "industrial", "textile", "grain", "fertilizer",
-                "chemical", "paper", "brick", "stone", "sand", "food"]
-    for kw in keywords:
+    keywords = {
+        "steel": "Steel", "loha": "Steel", "iron": "Iron",
+        "cement": "Cement", "siment": "Cement",
+        "coal": "Coal", "koyla": "Coal",
+        "rice": "Rice", "chawal": "Rice", "wheat": "Wheat",
+        "pipe": "Pipe", "machinery": "Machinery", "industrial": "Industrial",
+        "textile": "Textile", "grain": "Grain", "fertilizer": "Fertilizer",
+        "chemical": "Chemical", "paper": "Paper", "brick": "Brick",
+        "stone": "Stone", "sand": "Sand", "food": "Food", "saman": "Goods",
+    }
+    for kw, label in keywords.items():
         if kw in text:
-            return kw.title()
+            return label
     return None
 
 
@@ -254,6 +261,35 @@ class DemoProvider(BaseProvider):
         if "track" in text:
             intent["action"] = "track"
             intent["summary"] = "Tracking requested"
+            return intent
+
+        # --- cancellation (gated write) -----------------------------------
+        if any(k in text for k in ("cancel request", "cancel booking", "request cancel karo",
+                                   "booking cancel karo", "cancel karo")):
+            req_id = _extract_any_id(text)
+            if not req_id or not req_id.startswith("REQ-"):
+                intent["action"] = "cancel_request"
+                intent["clarification"] = "Which request should I cancel? Please give the request id (e.g. REQ-XXXX)."
+                return intent
+            intent["action"] = "cancel_request"
+            intent["request_id"] = req_id
+            intent["summary"] = f"Cancel request {req_id}"
+            return intent
+
+        # --- compare options ----------------------------------------------
+        if "compare" in text or "tulna karo" in text or "option compare" in text:
+            origin, destination = _find_location(text)
+            if origin and destination:
+                # route provided → run a fresh find_truck so the user gets
+                # comparable, scored cards.
+                intent["action"] = "find_truck"
+                intent["origin"] = origin
+                intent["destination"] = destination
+                intent["summary"] = f"Compare options {origin} → {destination}"
+                return intent
+            intent["action"] = "compare_options"
+            intent["clarification"] = ("To compare options, give me the route (e.g. "
+                                       "'compare Rourkela to Ranchi') or pick options on the Matching page.")
             return intent
 
         if "help" in text or "kya kar sakte ho" in text:
@@ -368,11 +404,15 @@ class DemoProvider(BaseProvider):
         budget = _extract_budget(text)
 
         is_transporter = any(k in text for k in (
-            "load milega", "load chahiye", "find load", "return load",
+            "load milega", "load chahiye", "find load", "return load", "backload",
             "empty truck", "meri gaadi", "load dhoondh", "load kahan",
+            "wapsi ka load", "return trip", "return ka load",
         ))
-
-        action = "find_load" if is_transporter else "find_truck"
+        is_alternate = any(k in text for k in ("alternate", "another vehicle", "dusra truck",
+                                               "alternative vehicle", "duusra vehicle"))
+        action = "find_truck" if is_alternate else ("find_load" if is_transporter else "find_truck")
+        if is_alternate:
+            intent["summary_meta"] = "alternate_vehicle"
 
         # Loads are searched from the transporter's current route: if only
         # one city is given, treat it as the origin (truck location).

@@ -45,7 +45,7 @@ def _build_graph(checkpointer):
         if action in ("find_truck", "find_load"):
             return "discover"
         if action in ("create_request", "send_offer", "accept_offer", "confirm_request",
-                      "publish_availability", "counter_offer"):
+                      "publish_availability", "counter_offer", "cancel_request"):
             return "coordinate"
         return END
 

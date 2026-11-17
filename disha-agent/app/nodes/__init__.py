@@ -29,7 +29,7 @@ SYSTEM_PROMPT = (
 
 INTENT_PROMPT = """Extract a structured intent from the user's freight request.
 Return ONLY a JSON object with these fields:
-{"action": "find_truck"|"find_load"|"create_request"|"send_offer"|"accept_offer"|"confirm_request"|"publish_availability"|"price_quote"|"counter_offer"|"remember"|"track"|"help"|"chat",
+{"action": "find_truck"|"find_load"|"create_request"|"send_offer"|"accept_offer"|"confirm_request"|"publish_availability"|"price_quote"|"counter_offer"|"cancel_request"|"compare_options"|"remember"|"track"|"help"|"chat",
  "origin": str|null, "destination": str|null, "goods": str|null,
  "weight_tonnes": number|null, "vehicle_type": str|null,
  "pickup_date": "YYYY-MM-DD"|null, "budget_inr": number|null,
@@ -42,6 +42,8 @@ Return ONLY a JSON object with these fields:
   availability (never publish without explicit approval).
 - "price_quote" means the user wants a freight price estimate.
 - "counter_offer" means the user wants to negotiate a price.
+- "cancel_request" means the user wants to cancel a request they own.
+- "compare_options" means the user wants to compare transport options.
 - If essential fields are missing for the action, set "clarification" to one
   short question and leave other fields null.
 - The summary is a one-sentence human summary of the understood intent.
@@ -193,8 +195,8 @@ def _parse_intent(text: str) -> dict | None:
         return None
     allowed = {"find_truck", "find_load", "create_request", "send_offer",
                "accept_offer", "confirm_request", "publish_availability",
-               "price_quote", "counter_offer", "remember", "track",
-               "help", "chat"}
+               "price_quote", "counter_offer", "cancel_request",
+               "compare_options", "remember", "track", "help", "chat"}
     if data["action"] not in allowed:
         return None
     return data
@@ -283,7 +285,7 @@ def coordinate(state: DishaState) -> DishaState:
 
     # Build the pending action (write) — never executed without approval.
     if action in ("create_request", "send_offer", "accept_offer", "confirm_request",
-                  "publish_availability", "counter_offer"):
+                  "publish_availability", "counter_offer", "cancel_request"):
         tool, payload = _action_payload(action, state["intent"])
         state["pending_action"] = {
             "type": tool,
@@ -351,6 +353,8 @@ def _action_payload(action: str, intent: dict) -> tuple[str, dict]:
                 "message": "Counter-offer requested via chat",
             },
         )
+    if action == "cancel_request":
+        return ("cancel_request", {"request_id": intent.get("request_id") or ""})
     raise ValueError(f"unknown action {action}")
 
 
@@ -373,6 +377,8 @@ def _action_summary(action: str, payload: dict) -> str:
         return f"record a counter-offer on request {payload.get('request_id')}" + (
             f" at ₹{int(amt):,}" if amt else ""
         )
+    if action == "cancel_request":
+        return f"cancel request {payload.get('request_id')}"
     return action
 
 
