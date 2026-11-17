@@ -31,9 +31,12 @@ class GeminiProvider(BaseProvider):
                 timeout=settings.provider_timeout_s,
             )
         except httpx.HTTPError as exc:
-            raise ProviderError(f"gemini transport error: {exc.__class__.__name__}") from exc
+            raise ProviderError(
+                f"gemini transport error: {exc.__class__.__name__}", retryable=True
+            ) from exc
         if resp.status_code != 200:
-            raise ProviderError(f"gemini HTTP {resp.status_code}")
+            retryable = resp.status_code == 429 or resp.status_code >= 500
+            raise ProviderError(f"gemini HTTP {resp.status_code}", retryable=retryable)
         data = resp.json()
         try:
             text = data["candidates"][0]["content"]["parts"][0]["text"]

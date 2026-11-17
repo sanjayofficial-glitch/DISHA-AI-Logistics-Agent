@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -67,6 +68,23 @@ class Settings(BaseSettings):
     provider_timeout_s: float = 20.0
     provider_retries: int = 1
 
+    @model_validator(mode="after")
+    def _production_auth_required(self):
+        """Fail closed in production: the Clerk->Supabase JWT contract must be
+        explicit, and the dev JWT secret fallback is forbidden."""
+        if self.environment == "production":
+            if not self.clerk_expected_issuer or not self.clerk_expected_audience:
+                raise ValueError(
+                    "production requires CLERK_EXPECTED_ISSUER and "
+                    "CLERK_EXPECTED_AUDIENCE"
+                )
+            if not self.supabase_jwt_secret:
+                raise ValueError(
+                    "production requires SUPABASE_JWT_SECRET "
+                    "(the dev fallback secret is forbidden in production)"
+                )
+        return self
+
     @property
     def demo_mode(self) -> bool:
         """True when no real LLM provider is configured.
@@ -78,6 +96,14 @@ class Settings(BaseSettings):
         return not (self.gemini_api_key or self.groq_api_key)
 
     @property
+    def supabase_configured(self) -> bool:
+        """True when a real Supabase project is wired up (either credentials
+        or the JWT secret). Demo login must never operate in this state."""
+        return bool(self.supabase_url and self.supabase_anon_key) or bool(
+            self.supabase_jwt_secret
+        )
+
+    @property
     def jwt_secret(self) -> str:
         if self.supabase_jwt_secret:
             return self.supabase_jwt_secret
@@ -86,9 +112,10 @@ class Settings(BaseSettings):
 
     @property
     def demo_login_enabled(self) -> bool:
-        """POST /auth/demo-login is only reachable when no real Supabase JWT
-        secret has been configured (i.e. demo mode)."""
-        return self.supabase_jwt_secret is None
+        """POST /auth/demo-login is only reachable in local demo mode:
+        never in production, and never while a real Supabase project is
+        configured (production cannot silently fall back to demo auth)."""
+        return self.environment != "production" and not self.supabase_configured
 
 
 settings = Settings()
