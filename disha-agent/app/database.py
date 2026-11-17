@@ -51,6 +51,10 @@ class MarketplaceStore(Protocol):
     def get_trip(self, trip_id: str) -> dict | None: ...
     def get_request(self, request_id: str) -> dict | None: ...
     def get_offer(self, offer_id: str) -> dict | None: ...
+    def register_vehicle_availability(self, payload: dict) -> dict: ...
+    def get_offers_for_request(self, request_id: str) -> list[dict]: ...
+    def make_counter_offer(self, payload: dict) -> dict: ...
+    def get_negotiations(self, request_id: str) -> list[dict]: ...
 
 
 SCHEMA = """
@@ -134,6 +138,17 @@ CREATE TABLE IF NOT EXISTS events (
     status TEXT,
     payload_summary TEXT,
     created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS negotiations (
+    id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    offer_id TEXT,
+    party_user_id TEXT NOT NULL,
+    amount_inr REAL NOT NULL,
+    message TEXT DEFAULT '',
+    status TEXT DEFAULT 'counter',
+    created_at TEXT,
+    source TEXT DEFAULT 'synthetic_seed_data'
 );
 CREATE INDEX IF NOT EXISTS idx_trips_cities ON trips(origin_city, destination_city);
 CREATE INDEX IF NOT EXISTS idx_shipments_cities ON shipments(origin_city, destination_city);
@@ -311,6 +326,70 @@ class SQLiteStore:
     def get_offer(self, offer_id: str) -> dict | None:
         return self._q1("SELECT * FROM shipment_requests WHERE id=?", (offer_id,))
 
+    def register_vehicle_availability(self, payload: dict) -> dict:
+        """Publish a vehicle availability as an ACTIVE demo trip row."""
+        tid = f"TRIP-{uuid.uuid4().hex[:8].upper()}"
+        row = {
+            "id": tid,
+            "transporter_user_id": payload["transporter_user_id"],
+            "origin_city": _norm_city(payload.get("origin")),
+            "destination_city": _norm_city(payload.get("destination")),
+            "departure_date": str(payload.get("pickup_date") or ""),
+            "capacity_tonnes": payload.get("capacity_tonnes"),
+            "price_per_tonne": None,
+            "vehicle_type": str(payload.get("vehicle_type") or "open_body"),
+            "reliability_score": 0.8,
+            "status": "active",
+            "note": "[DEMO] synthetic vehicle availability",
+            "source": "synthetic_seed_data",
+        }
+        self._exec(
+            "INSERT INTO trips (id, transporter_user_id, origin_city, destination_city, "
+            "departure_date, capacity_tonnes, price_per_tonne, vehicle_type, reliability_score, "
+            "status, note, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            tuple(row[k] for k in (
+                "id", "transporter_user_id", "origin_city", "destination_city",
+                "departure_date", "capacity_tonnes", "price_per_tonne",
+                "vehicle_type", "reliability_score", "status", "note", "source",
+            )),
+        )
+        return self.get_trip(tid) or row
+
+    def get_offers_for_request(self, request_id: str) -> list[dict]:
+        return self._q(
+            "SELECT * FROM shipment_requests WHERE request_id=? ORDER BY created_at ASC",
+            (request_id,),
+        )
+
+    def make_counter_offer(self, payload: dict) -> dict:
+        nid = f"NEG-{uuid.uuid4().hex[:8].upper()}"
+        row = {
+            "id": nid,
+            "request_id": payload["request_id"],
+            "offer_id": payload.get("offer_id"),
+            "party_user_id": payload["party_user_id"],
+            "amount_inr": payload.get("amount_inr"),
+            "message": str(payload.get("message") or ""),
+            "status": "counter",
+            "created_at": utcnow(),
+            "source": "synthetic_seed_data",
+        }
+        self._exec(
+            "INSERT INTO negotiations (id, request_id, offer_id, party_user_id, amount_inr, "
+            "message, status, created_at, source) VALUES (?,?,?,?,?,?,?,?,?)",
+            tuple(row[k] for k in (
+                "id", "request_id", "offer_id", "party_user_id", "amount_inr",
+                "message", "status", "created_at", "source",
+            )),
+        )
+        return row
+
+    def get_negotiations(self, request_id: str) -> list[dict]:
+        return self._q(
+            "SELECT * FROM negotiations WHERE request_id=? ORDER BY created_at ASC",
+            (request_id,),
+        )
+
 
 class SupabaseStore:
     """Read/write against the real LoadSaathi Supabase tables with the
@@ -438,6 +517,31 @@ class SupabaseStore:
     def get_offer(self, offer_id: str) -> dict | None:
         rows = self._rest("shipment_requests", {"id": f"eq.{offer_id}"})
         return rows[0] if rows else None
+
+    def register_vehicle_availability(self, payload: dict) -> dict:
+        # Live Supabase trip publishing is intentionally NOT wired for the
+        # competition demo; availability publishing is demo SQLite only.
+        raise NotImplementedError(
+            "register_vehicle_availability: live Supabase path not wired "
+            "(demo SQLite only)"
+        )
+
+    def get_offers_for_request(self, request_id: str) -> list[dict]:
+        return self._rest("shipment_requests", {
+            "request_id": f"eq.{request_id}", "order": "created_at",
+        })
+
+    def make_counter_offer(self, payload: dict) -> dict:
+        raise NotImplementedError(
+            "make_counter_offer: live Supabase negotiation schema absent "
+            "(demo SQLite only)"
+        )
+
+    def get_negotiations(self, request_id: str) -> list[dict]:
+        raise NotImplementedError(
+            "get_negotiations: live Supabase negotiation schema absent "
+            "(demo SQLite only)"
+        )
 
 
 def get_store(user_token: str | None = None) -> MarketplaceStore:

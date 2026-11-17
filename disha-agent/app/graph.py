@@ -44,7 +44,8 @@ def _build_graph(checkpointer):
         action = state.get("intent", {}).get("action")
         if action in ("find_truck", "find_load"):
             return "discover"
-        if action in ("create_request", "send_offer", "accept_offer", "confirm_request"):
+        if action in ("create_request", "send_offer", "accept_offer", "confirm_request",
+                      "publish_availability", "counter_offer"):
             return "coordinate"
         return END
 

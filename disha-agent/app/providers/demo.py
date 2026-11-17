@@ -74,7 +74,8 @@ def _find_location(text: str) -> tuple[str | None, str | None]:
 
 
 def _extract_weight(text: str) -> float | None:
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(tonnes|tonne|tons|ton|tn)\b", text)
+    # Allow hyphenated units: "14-tonne", "8 tons", "5 tonne".
+    m = re.search(r"(\d+(?:\.\d+)?)\s*-?\s*(tonnes|tonne|tons|ton|tn)\b", text)
     if m:
         return float(m.group(1))
     m = re.search(r"(\d+(?:\.\d+)?)\s*kg\b", text)
@@ -122,6 +123,11 @@ def _extract_budget(text: str) -> float | None:
     if m:
         return float(m.group(1).replace(",", ""))
     m = re.search(r"budget\s+(\d+(?:,\d{3})*)", text)
+    if m:
+        return float(m.group(1).replace(",", ""))
+    # Numeric-only amounts after a preposition: "at 38000", "to 34000",
+    # "for 30000" — currency symbol is optional.
+    m = re.search(r"\b(?:at|to|for|of)\s+(\d+(?:,\d{3})*(?:\.\d+)?)\b", text)
     if m:
         return float(m.group(1).replace(",", ""))
     return None
@@ -213,6 +219,24 @@ class DemoProvider(BaseProvider):
             intent["summary"] = f"Confirm request {req_id}"
             return intent
 
+        # --- counter-offer / negotiation (before send-offer: "counter offer
+        # on REQ-…" must never be treated as a fresh offer) ------------------
+        if any(k in text for k in ("negotiate", "counter", "lower your offer",
+                                   "reduce your offer", "kam karo", "best price")):
+            offer_ref = _extract_any_id(text)
+            if not offer_ref:
+                intent["action"] = "counter_offer"
+                intent["clarification"] = ("Which request/offer should I negotiate? "
+                                           "Please give the request id (e.g. REQ-XXXX).")
+                return intent
+            intent["action"] = "counter_offer"
+            intent["request_id"] = offer_ref
+            price = _extract_budget(text)
+            if price:
+                intent["budget_inr"] = price
+            intent["summary"] = f"Counter-offer on {offer_ref}" + (f" at ₹{int(price):,}" if price else "")
+            return intent
+
         if "send offer" in text or "make an offer" in text or "offer on" in text:
             req_id = _extract_any_id(text)
             if not req_id or not req_id.startswith("REQ-"):
@@ -234,6 +258,39 @@ class DemoProvider(BaseProvider):
 
         if "help" in text or "kya kar sakte ho" in text:
             intent["action"] = "help"
+            return intent
+
+        # --- transporter vehicle availability ------------------------------
+        demand_markers = ("need", "require", "transport", "chahiye", "chahie", "want")
+        if ("vehicle" in text or "truck" in text or "gaadi" in text) and \
+           ("available" in text or "confirm" in text) and \
+           not any(m in text for m in demand_markers):
+            origin, destination = _find_location(text)
+            capacity = _extract_weight(text)
+            vehicle = _extract_vehicle(text) or "open_body"
+            missing = []
+            if not origin:
+                missing.append("origin")
+            if not destination:
+                missing.append("destination")
+            if capacity is None:
+                missing.append("capacity_tonnes")
+            if missing:
+                intent["action"] = "publish_availability"
+                intent["missing_fields"] = missing
+                intent["clarification"] = ("To publish your vehicle availability I need: " +
+                                           ", ".join(missing) + ".")
+                return intent
+            intent["action"] = "publish_availability"
+            intent["origin"] = origin
+            intent["destination"] = destination
+            intent["weight_tonnes"] = capacity
+            intent["vehicle_type"] = vehicle
+            if "confirm" not in text:
+                intent["clarification"] = (f"Please confirm: publish your vehicle availability — "
+                                           f"{capacity:g}-tonne from {origin} → {destination}?")
+                return intent
+            intent["summary"] = f"Publish vehicle availability {capacity:g}t {origin} → {destination}"
             return intent
 
         # --- explicit create-request command ------------------------------
@@ -275,6 +332,31 @@ class DemoProvider(BaseProvider):
                                            ", ".join(missing) + ".")
                 return intent
             intent["summary"] = f"Create shipment request {origin} → {destination} ({weight:g}t)"
+            return intent
+
+        # --- price quote request ------------------------------------------
+        if any(k in text for k in ("how much should i pay", "what should i pay",
+                                   "quote", "estimate price", "kitna lagega")):
+            origin, destination = _find_location(text)
+            weight = _extract_weight(text)
+            missing = []
+            if not origin:
+                missing.append("origin")
+            if not destination:
+                missing.append("destination")
+            if weight is None:
+                missing.append("weight_tonnes")
+            if missing:
+                intent["action"] = "price_quote"
+                intent["missing_fields"] = missing
+                intent["clarification"] = ("I need the route and weight to estimate freight: " +
+                                           ", ".join(missing) + ".")
+                return intent
+            intent["action"] = "price_quote"
+            intent["origin"] = origin
+            intent["destination"] = destination
+            intent["weight_tonnes"] = weight
+            intent["summary"] = f"Estimate freight {origin} → {destination} ({weight:g}t)"
             return intent
 
         # --- find truck vs find load -------------------------------------

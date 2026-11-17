@@ -134,6 +134,54 @@ def _send_notification(store, args: dict) -> dict:
     return {"notification_id": row["id"]}
 
 
+class RegisterVehicleAvailabilityArgs(BaseModel):
+    origin: str = Field(min_length=1, max_length=100)
+    destination: str = Field(min_length=1, max_length=100)
+    capacity_tonnes: float = Field(gt=0, le=200)
+    vehicle_type: str = Field(default="open_body", max_length=50)
+    pickup_date: str = Field(default="", max_length=10)
+
+
+def _register_vehicle_availability(store, args: dict) -> dict:
+    """Publish a transporter's vehicle availability (approval-gated)."""
+    payload = dict(args)
+    payload["origin"] = clean_city(args["origin"])
+    payload["destination"] = clean_city(args["destination"])
+    payload["transporter_user_id"] = current_user_id()
+    row = store.register_vehicle_availability(payload)
+    return {"trip_id": row["id"], "status": row["status"], "row": row}
+
+
+class MakeCounterOfferArgs(BaseModel):
+    request_id: str = Field(min_length=4, max_length=32)
+    amount_inr: float = Field(gt=0, le=1_000_000_000)
+    message: str = Field(default="", max_length=500)
+
+
+def _make_counter_offer(store, args: dict) -> dict:
+    """Record a negotiation counter-offer. Participants only (shipper or a
+    transporter with an offer on the request). Never auto-accepts anything."""
+    rid = args["request_id"].strip().upper()
+    req = store.get_request(rid)
+    if not req:
+        raise ValueError("request not found")
+    uid = current_user_id()
+    offers = store.get_offers_for_request(rid)
+    is_participant = req.get("shipper_user_id") == uid or any(
+        o.get("transporter_user_id") == uid for o in offers
+    )
+    if not is_participant:
+        raise ValueError("only participants in this request can negotiate")
+    row = store.make_counter_offer({
+        "request_id": rid,
+        "offer_id": None,
+        "party_user_id": uid,
+        "amount_inr": args["amount_inr"],
+        "message": args["message"],
+    })
+    return {"negotiation_id": row["id"], "status": row["status"], "row": row}
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -146,6 +194,8 @@ MAKERS = [
     ("accept_offer", "Transporter accepts a pending offer.", AcceptOfferArgs, _accept_offer, False),
     ("confirm_request", "Shipper confirms a pending request (booking confirmed).", ConfirmRequestArgs, _confirm_request, False),
     ("send_notification", "Insert a notification row.", SendNotificationArgs, _send_notification, False),
+    ("register_vehicle_availability", "Transporter publishes vehicle availability (active trip row).", RegisterVehicleAvailabilityArgs, _register_vehicle_availability, False),
+    ("make_counter_offer", "Record a negotiation counter-offer on a request (participants only).", MakeCounterOfferArgs, _make_counter_offer, False),
 ]
 
 for _name, _desc, _schema, _handler, _ro in MAKERS:

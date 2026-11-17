@@ -11,6 +11,7 @@ from ..providers import BaseProvider, ProviderError, get_fallback_provider, get_
 from ..providers.demo import DemoProvider
 from ..state import DishaState
 from ..tools.marketplace import rank_rows
+from ..tools.pricing import quote
 
 _event_store = events_mod.EventStore()
 _memory = MemoryStore()
@@ -28,7 +29,7 @@ SYSTEM_PROMPT = (
 
 INTENT_PROMPT = """Extract a structured intent from the user's freight request.
 Return ONLY a JSON object with these fields:
-{"action": "find_truck"|"find_load"|"create_request"|"send_offer"|"accept_offer"|"confirm_request"|"remember"|"track"|"help"|"chat",
+{"action": "find_truck"|"find_load"|"create_request"|"send_offer"|"accept_offer"|"confirm_request"|"publish_availability"|"price_quote"|"counter_offer"|"remember"|"track"|"help"|"chat",
  "origin": str|null, "destination": str|null, "goods": str|null,
  "weight_tonnes": number|null, "vehicle_type": str|null,
  "pickup_date": "YYYY-MM-DD"|null, "budget_inr": number|null,
@@ -37,6 +38,10 @@ Return ONLY a JSON object with these fields:
  "summary": str}
 - "remember" means the user explicitly asked you to store a fact (put the
   fact text in fact_text).
+- "publish_availability" means a transporter wants to publish vehicle
+  availability (never publish without explicit approval).
+- "price_quote" means the user wants a freight price estimate.
+- "counter_offer" means the user wants to negotiate a price.
 - If essential fields are missing for the action, set "clarification" to one
   short question and leave other fields null.
 - The summary is a one-sentence human summary of the understood intent.
@@ -74,6 +79,37 @@ def _complete_with_retry(provider: BaseProvider, system: str, user: str) -> str:
     if last is not None:
         raise last
     raise ProviderError(f"{provider.name} provider returned no response")
+
+
+def _price_quote_reply(intent: dict) -> str:
+    """Deterministic freight estimate reply (never a market quotation)."""
+    q = quote(
+        intent.get("origin") or "",
+        intent.get("destination") or "",
+        intent.get("weight_tonnes") or 0,
+        intent.get("vehicle_type"),
+    )
+    if not q["available"]:
+        return f"I can't estimate that: {q['reason']}"
+    lines = [
+        f"Estimated freight for {q['weight_tonnes']:g}t, "
+        f"{q['origin'].title()} → {q['destination'].title()} "
+        f"(≈{q['distance_assumption_km']} km):",
+        f"  Total: ₹{q['total_inr']:,.0f} (estimate)",
+        f"  Per tonne: ₹{q['per_tonne_inr']:,.0f}",
+        "  Breakdown:",
+    ]
+    bd = q["breakdown"]
+    lines.append(
+        f"    - base ₹{bd['base_charge_per_km_inr']:g}/km × "
+        f"{bd['distance_assumption_km']} km × fuel/toll {bd['fuel_toll_factor']}"
+    )
+    lines.append(f"    - formula: {bd['formula']}")
+    lines.append("  Assumptions:")
+    for a in q["assumptions"]:
+        lines.append(f"    - {a}")
+    lines.append("  IMPORTANT: this is an ESTIMATE — not a verified market quotation.")
+    return "\n".join(lines)
 
 
 def understand(state: DishaState) -> DishaState:
@@ -132,9 +168,12 @@ def understand(state: DishaState) -> DishaState:
         state["reply"] = intent["clarification"]
         return state
 
-    if intent.get("action") in ("help", "track", "chat"):
+    if intent.get("action") in ("help", "track", "chat", "price_quote"):
         state["status"] = "ok"
-        state["reply"] = used.complete(SYSTEM_PROMPT, message)
+        if intent.get("action") == "price_quote":
+            state["reply"] = _price_quote_reply(intent)
+        else:
+            state["reply"] = used.complete(SYSTEM_PROMPT, message)
         return state
 
     return state
@@ -153,7 +192,8 @@ def _parse_intent(text: str) -> dict | None:
     if not isinstance(data, dict) or "action" not in data:
         return None
     allowed = {"find_truck", "find_load", "create_request", "send_offer",
-               "accept_offer", "confirm_request", "remember", "track",
+               "accept_offer", "confirm_request", "publish_availability",
+               "price_quote", "counter_offer", "remember", "track",
                "help", "chat"}
     if data["action"] not in allowed:
         return None
@@ -242,7 +282,8 @@ def coordinate(state: DishaState) -> DishaState:
         return state
 
     # Build the pending action (write) — never executed without approval.
-    if action in ("create_request", "send_offer", "accept_offer", "confirm_request"):
+    if action in ("create_request", "send_offer", "accept_offer", "confirm_request",
+                  "publish_availability", "counter_offer"):
         tool, payload = _action_payload(action, state["intent"])
         state["pending_action"] = {
             "type": tool,
@@ -290,6 +331,26 @@ def _action_payload(action: str, intent: dict) -> tuple[str, dict]:
         return ("accept_offer", {"offer_id": intent.get("offer_id") or ""})
     if action == "confirm_request":
         return ("confirm_request", {"request_id": intent.get("request_id") or ""})
+    if action == "publish_availability":
+        return (
+            "register_vehicle_availability",
+            {
+                "origin": intent.get("origin") or "",
+                "destination": intent.get("destination") or "",
+                "capacity_tonnes": intent.get("weight_tonnes") or 1.0,
+                "vehicle_type": intent.get("vehicle_type") or "open_body",
+                "pickup_date": intent.get("pickup_date") or "",
+            },
+        )
+    if action == "counter_offer":
+        return (
+            "make_counter_offer",
+            {
+                "request_id": intent.get("request_id") or "",
+                "amount_inr": intent.get("budget_inr"),
+                "message": "Counter-offer requested via chat",
+            },
+        )
     raise ValueError(f"unknown action {action}")
 
 
@@ -303,6 +364,15 @@ def _action_summary(action: str, payload: dict) -> str:
         return f"accept offer {payload.get('offer_id')}"
     if action == "confirm_request":
         return f"confirm request {payload.get('request_id')} (booking confirmed)"
+    if action == "publish_availability":
+        return (f"confirm and publish your vehicle availability "
+                f"{payload['capacity_tonnes']:g}t from {payload['origin']} → "
+                f"{payload['destination']}")
+    if action == "counter_offer":
+        amt = payload.get("amount_inr")
+        return f"record a counter-offer on request {payload.get('request_id')}" + (
+            f" at ₹{int(amt):,}" if amt else ""
+        )
     return action
 
 

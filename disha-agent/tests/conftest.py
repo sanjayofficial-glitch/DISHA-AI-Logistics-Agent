@@ -29,7 +29,7 @@ from app.seed.cli import seed  # noqa: E402
 # (trips, shipments) stay intact.
 RESET_TABLES = [
     "shipment_requests", "requests", "notifications", "facts", "events",
-    "checkpoints", "writes", "blobs", "metadata",
+    "negotiations", "checkpoints", "writes", "blobs", "metadata",
 ]
 
 

@@ -107,6 +107,38 @@ class SearchBody(BaseModel):
     budget_inr: Optional[float] = Field(default=None, gt=0)
 
 
+class QuoteBody(BaseModel):
+    origin: str = Field(min_length=1, max_length=100)
+    destination: str = Field(min_length=1, max_length=100)
+    weight_tonnes: float = Field(gt=0, le=1000)
+    vehicle_type: Optional[str] = Field(default=None, max_length=50)
+
+
+_STATUS_EXPLAINED = {
+    ("request", "pending"): "Pending — waiting for transporter confirmation.",
+    ("request", "confirmed"): "Confirmed — booking finalized.",
+    ("offer", "pending"): "Pending — awaiting shipper decision.",
+    ("offer", "accepted"): "Accepted — transporter agreed; waiting for shipper confirmation.",
+    ("offer", "declined"): "Declined — this offer was not selected.",
+    ("offer", "counter"): "Counter-offer recorded — awaiting a decision.",
+    ("shipment", "pending"): "Pending — shipper is looking for a truck.",
+    ("trip", "active"): "Active — vehicle availability is published on the marketplace.",
+}
+
+
+def _status_explained(entity: str, row: dict) -> str:
+    """Human-readable status + next step. Uses only timestamps that actually
+    exist on the row — never invented events."""
+    st = (row.get("status") or "").strip().lower()
+    text = _STATUS_EXPLAINED.get(
+        (entity, st), f"{st.capitalize()} — see marketplace for details."
+    )
+    ts = row.get("confirmed_at") or row.get("decided_at") or row.get("created_at")
+    if ts:
+        text += f" Recorded {ts}."
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -277,10 +309,21 @@ def market_search_trips(body: SearchBody, user_id: str = Depends(require_user),
             "is_demo": True, "source": "synthetic_seed_data"}
 
 
+@app.post("/market/quote")
+def market_quote(body: QuoteBody, user_id: str = Depends(require_user)):
+    """Deterministic freight estimate (read-only, never a market quotation)."""
+    from .tools.pricing import quote
+    return {"quote": quote(body.origin, body.destination, body.weight_tonnes, body.vehicle_type),
+            "is_demo": True, "source": "synthetic_seed_data"}
+
+
 @app.get("/portal/shipper/requests")
 def shipper_requests(user_id: str = Depends(require_user), auth: tuple[str, str] = Depends(require_token)):
     store = get_store(auth[1])
-    return {"requests": store.get_user_requests(user_id)}
+    rows = store.get_user_requests(user_id)
+    for r in rows:
+        r["status_explained"] = _status_explained("request", r)
+    return {"requests": rows}
 
 
 @app.get("/portal/trucker/shipments")
@@ -305,6 +348,7 @@ def trucker_shipments(user_id: str = Depends(require_user), auth: tuple[str, str
         item["explanation"] = scored["explanation"]
         item["is_demo"] = True
         item["source"] = "synthetic_seed_data"
+        item["status_explained"] = _status_explained("shipment", row)
         enriched.append(item)
     enriched.sort(key=lambda r: r["score"], reverse=True)
     return {"shipments": enriched}
@@ -313,7 +357,28 @@ def trucker_shipments(user_id: str = Depends(require_user), auth: tuple[str, str
 @app.get("/portal/trucker/offers")
 def trucker_offers(user_id: str = Depends(require_user), auth: tuple[str, str] = Depends(require_token)):
     store = get_store(auth[1])
-    return {"offers": store.get_user_offers(user_id)}
+    rows = store.get_user_offers(user_id)
+    for o in rows:
+        o["status_explained"] = _status_explained("offer", o)
+    return {"offers": rows}
+
+
+@app.get("/portal/negotiations/{request_id}")
+def negotiations(request_id: str, auth: tuple[str, str] = Depends(require_token)):
+    """Negotiation history — participants only (shipper or an offering
+    transporter). Never auto-accepts anything."""
+    uid = auth[0]
+    store = get_store(auth[1])
+    req = store.get_request(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="request not found")
+    offers = store.get_offers_for_request(request_id)
+    is_participant = req.get("shipper_user_id") == uid or any(
+        o.get("transporter_user_id") == uid for o in offers
+    )
+    if not is_participant:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return {"request_id": request_id, "negotiations": store.get_negotiations(request_id)}
 
 
 @app.get("/portal/notifications")
