@@ -317,6 +317,34 @@ def market_quote(body: QuoteBody, user_id: str = Depends(require_user)):
             "is_demo": True, "source": "synthetic_seed_data"}
 
 
+@app.get("/market/stats")
+def market_stats(user_id: str = Depends(require_user), auth: tuple[str, str] = Depends(require_token)):
+    """Global marketplace counts + caller-scoped pending requests (read-only)."""
+    store = get_store(auth[1])
+    stats = store.get_market_stats()
+    reqs = store.get_user_requests(user_id)
+    stats["my_pending_requests"] = sum(1 for r in reqs if r.get("status") == "pending")
+    return stats
+
+
+@app.get("/market/trips")
+def market_trips(user_id: str = Depends(require_user), auth: tuple[str, str] = Depends(require_token)):
+    """Active vehicle availability visible to the caller (read-only)."""
+    store = get_store(auth[1])
+    rows = store.get_active_trips()
+    for t in rows:
+        t["is_demo"] = True
+        t["source"] = "synthetic_seed_data"
+    return {"trips": rows, "count": len(rows),
+            "is_demo": True, "source": "synthetic_seed_data"}
+
+
+@app.get("/approvals")
+def approvals(auth: tuple[str, str] = Depends(require_token)):
+    """Owner-scoped pending human approvals (read-only, from checkpoint state)."""
+    return {"approvals": service.pending_approvals(auth[1])}
+
+
 @app.get("/portal/shipper/requests")
 def shipper_requests(user_id: str = Depends(require_user), auth: tuple[str, str] = Depends(require_token)):
     store = get_store(auth[1])

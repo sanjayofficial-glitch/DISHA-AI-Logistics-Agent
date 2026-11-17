@@ -49,6 +49,7 @@ class MarketplaceStore(Protocol):
     def get_pending_shipments(self) -> list[dict]: ...
     def get_shipment(self, shipment_id: str) -> dict | None: ...
     def get_trip(self, trip_id: str) -> dict | None: ...
+    def get_active_trips(self, limit: int = 100) -> list[dict]: ...
     def get_request(self, request_id: str) -> dict | None: ...
     def get_offer(self, offer_id: str) -> dict | None: ...
     def register_vehicle_availability(self, payload: dict) -> dict: ...
@@ -192,6 +193,12 @@ class SQLiteStore:
             (o, d, limit),
         )
         return [dict(r) for r in rows]
+
+    def get_active_trips(self, limit: int = 100) -> list[dict]:
+        return self._q(
+            "SELECT * FROM trips WHERE status='active' ORDER BY departure_date LIMIT ?",
+            (limit,),
+        )
 
     def search_shipments(self, origin: str, destination: str, limit: int | None = None) -> list[dict]:
         o, d = _norm_city(origin), _norm_city(destination)
@@ -436,6 +443,11 @@ class SupabaseStore:
             "destination_city": f"eq.{_norm_city(destination)}",
             "order": "departure_date",
             "limit": str(limit),
+        })
+
+    def get_active_trips(self, limit: int = 100) -> list[dict]:
+        return self._rest("trips", {
+            "status": "eq.active", "order": "departure_date", "limit": str(limit),
         })
 
     def search_shipments(self, origin: str, destination: str, limit: int | None = None) -> list[dict]:

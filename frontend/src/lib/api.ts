@@ -188,6 +188,7 @@ export interface MarketplaceRequest {
   status: string;
   created_at: string;
   confirmed_at: string | null;
+  status_explained?: string;
 }
 
 export async function myRequests(): Promise<MarketplaceRequest[]> {
@@ -207,6 +208,7 @@ export interface Shipment {
   factors: Record<string, { score: number; note: string }>;
   explanation: string;
   is_demo: boolean;
+  status_explained?: string;
 }
 
 export async function truckerShipments(): Promise<Shipment[]> {
@@ -266,4 +268,108 @@ export async function addFact(text: string): Promise<Fact> {
 
 export async function deleteFact(id: string) {
   await apiJson(`/memory/${id}`, { method: "DELETE" });
+}
+
+// --- Command Center: statistical/read-only views --------------------------
+
+export interface MarketStats {
+  active_trips: number;
+  pending_shipments: number;
+  pending_requests: number;
+  my_pending_requests: number;
+  is_demo: boolean;
+  source: string;
+}
+
+export async function marketStats(): Promise<MarketStats> {
+  return apiJson<MarketStats>("/market/stats");
+}
+
+export interface TripRow {
+  id: string;
+  transporter_user_id: string;
+  origin_city: string;
+  destination_city: string;
+  departure_date: string | null;
+  capacity_tonnes: number | null;
+  price_per_tonne: number | null;
+  vehicle_type: string;
+  reliability_score: number | null;
+  status: string;
+  note: string;
+  source: string;
+  is_demo?: boolean;
+}
+
+export async function marketTrips(): Promise<TripRow[]> {
+  const data = await apiJson<{ trips: TripRow[] }>("/market/trips");
+  return data.trips;
+}
+
+export interface ApprovalRow {
+  thread_id: string;
+  type: string;
+  summary: string;
+  created_at: string;
+}
+
+export async function approvals(): Promise<ApprovalRow[]> {
+  const data = await apiJson<{ approvals: ApprovalRow[] }>("/approvals");
+  return data.approvals;
+}
+
+export interface QuotePayload {
+  available: boolean;
+  reason?: string;
+  origin?: string;
+  destination?: string;
+  distance_assumption_km?: number;
+  weight_tonnes?: number;
+  vehicle_type?: string;
+  total_inr?: number;
+  per_tonne_inr?: number;
+  breakdown?: {
+    distance_assumption_km: number;
+    base_charge_per_km_inr: number;
+    fuel_toll_factor: number;
+    formula: string;
+  };
+  assumptions?: string[];
+  is_estimate?: boolean;
+}
+
+export async function quotePrice(opts: {
+  origin: string;
+  destination: string;
+  weight_tonnes: number;
+  vehicle_type?: string;
+}): Promise<QuotePayload> {
+  const data = await apiJson<{ quote: QuotePayload }>("/market/quote", {
+    method: "POST",
+    body: JSON.stringify(opts),
+  });
+  return data.quote;
+}
+
+export interface NegotiationRow {
+  id: string;
+  request_id: string;
+  offer_id: string | null;
+  party_user_id: string;
+  amount_inr: number | null;
+  message: string;
+  status: string;
+  created_at: string;
+  source: string;
+}
+
+export async function negotiations(requestId: string): Promise<NegotiationRow[]> {
+  const data = await apiJson<{ negotiations: NegotiationRow[] }>(
+    `/portal/negotiations/${encodeURIComponent(requestId)}`,
+  );
+  return data.negotiations;
+}
+
+export async function notifications(): Promise<NotificationRow[]> {
+  return (await apiJson<{ notifications: NotificationRow[] }>("/portal/notifications")).notifications;
 }

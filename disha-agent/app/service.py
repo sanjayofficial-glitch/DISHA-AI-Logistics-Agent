@@ -126,6 +126,31 @@ class AgentService:
         user_id = verify_token(token).sub
         return self._events.thread_ids_for_user(user_id)
 
+    def pending_approvals(self, token: str) -> list[dict]:
+        """Owner-scoped list of threads waiting on human approval (from the
+        LangGraph checkpointer state, read-only)."""
+        from .auth import verify_token
+
+        user_id = verify_token(token).sub
+        graph = self._ensure_graph()
+        out: list[dict] = []
+        for tid in self._events.thread_ids_for_user(user_id)[:50]:
+            state = graph.get_state(self._config(tid))
+            if not state or not state.values:
+                continue
+            values = state.values
+            if values.get("user_id") != user_id:
+                continue
+            pa = values.get("pending_action")
+            if values.get("approval_required") and pa:
+                out.append({
+                    "thread_id": tid,
+                    "type": pa.get("type"),
+                    "summary": pa.get("summary", ""),
+                    "created_at": pa.get("created_at", ""),
+                })
+        return out
+
     def metrics(self) -> dict:
         return self._events.metrics()
 
