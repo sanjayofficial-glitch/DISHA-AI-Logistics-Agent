@@ -1,10 +1,13 @@
 """LangGraph nodes for DISHA."""
 from __future__ import annotations
 
+import time
+
 from .. import events as events_mod
+from ..config import settings
 from ..context import current_user_id
 from ..memory.store import MemoryStore
-from ..providers import ProviderError, get_fallback_provider, get_provider
+from ..providers import BaseProvider, ProviderError, get_fallback_provider, get_provider
 from ..providers.demo import DemoProvider
 from ..state import DishaState
 from ..tools.marketplace import rank_rows
@@ -44,11 +47,41 @@ def _emit(thread_id: str, user_id: str, node: str, status: str, summary: str = "
     _event_store.append(thread_id, user_id, node, status, summary)
 
 
+_MAX_PROVIDER_ATTEMPTS = 1 + settings.provider_retries  # initial attempt + retries
+_PROVIDER_RETRY_DELAY_S = 0.25
+
+
+def _complete_with_retry(provider: BaseProvider, system: str, user: str) -> str:
+    """Call `provider.complete` with a bounded retry on retryable errors.
+
+    Retryable = rate limit (429), 5xx or transport/network failures (one
+    short backoff, bounded). Permanent errors (4xx auth/invalid request, bad
+    response payload) are not retried. Any unexpected crash is treated as
+    permanent. The last error is re-raised after the policy is exhausted.
+    """
+    last: ProviderError | None = None
+    for attempt in range(_MAX_PROVIDER_ATTEMPTS):
+        try:
+            return provider.complete(system, user)
+        except ProviderError as exc:
+            last = exc
+            if not exc.retryable or attempt + 1 >= _MAX_PROVIDER_ATTEMPTS:
+                break
+            time.sleep(_PROVIDER_RETRY_DELAY_S)
+        except Exception as exc:  # unexpected crash -> treat as permanent
+            last = ProviderError(f"{provider.name} provider failed: {exc}", retryable=False)
+            break
+    if last is not None:
+        raise last
+    raise ProviderError(f"{provider.name} provider returned no response")
+
+
 def understand(state: DishaState) -> DishaState:
     thread_id = state["thread_id"]
     user_id = state.get("user_id") or current_user_id()
     message = state.get("message") or ""
     provider = get_provider()
+    used = provider
 
     # Memory reference data (never instructions)
     memory_ctx = _memory.inject_context(user_id)
@@ -62,25 +95,29 @@ def understand(state: DishaState) -> DishaState:
         if memory_ctx:
             prompt += "\n\n" + memory_ctx
         user_prompt = f"User request: {message}"
+        fallback = get_fallback_provider()
         try:
-            text = provider.complete(SYSTEM_PROMPT, f"{prompt}\n\n{user_prompt}")
-            intent = _parse_intent(text)
-            if not intent:
-                fb = get_fallback_provider()
-                if fb:
-                    text = fb.complete(SYSTEM_PROMPT, f"{prompt}\n\n{user_prompt}")
-                    intent = _parse_intent(text)
-                if not intent:
-                    raise ProviderError("provider returned unparseable intent")
+            text = _complete_with_retry(provider, SYSTEM_PROMPT, f"{prompt}\n\n{user_prompt}")
         except ProviderError:
-            raise
-        except Exception as exc:
-            raise ProviderError(f"{provider.name} provider failed: {exc}") from exc
+            # Primary failed (after its retry policy) -> fail over.
+            if fallback is None:
+                raise
+            used = fallback
+            text = _complete_with_retry(fallback, SYSTEM_PROMPT, f"{prompt}\n\n{user_prompt}")
+        intent = _parse_intent(text)
+        if not intent:
+            # Primary succeeded but output was unparseable -> try the fallback.
+            if used is provider and fallback is not None:
+                used = fallback
+                text = _complete_with_retry(fallback, SYSTEM_PROMPT, f"{prompt}\n\n{user_prompt}")
+                intent = _parse_intent(text)
+            if not intent:
+                raise ProviderError("provider returned unparseable intent")
         _emit(thread_id, user_id, "understand", "done",
-              f"llm({provider.name}) -> action={intent.get('action')}")
+              f"llm({used.name}) -> action={intent.get('action')}")
 
     state["intent"] = intent
-    state["provider"] = provider.name
+    state["provider"] = used.name if not isinstance(provider, DemoProvider) else provider.name
     state["user_id"] = user_id
 
     if intent.get("action") == "remember" and intent.get("fact_text"):
@@ -97,7 +134,7 @@ def understand(state: DishaState) -> DishaState:
 
     if intent.get("action") in ("help", "track", "chat"):
         state["status"] = "ok"
-        state["reply"] = provider.complete(SYSTEM_PROMPT, message)
+        state["reply"] = used.complete(SYSTEM_PROMPT, message)
         return state
 
     return state

@@ -32,9 +32,12 @@ class GroqProvider(BaseProvider):
             resp = httpx.post(url, headers=headers, json=payload,
                                timeout=settings.provider_timeout_s)
         except httpx.HTTPError as exc:
-            raise ProviderError(f"groq transport error: {exc.__class__.__name__}") from exc
+            raise ProviderError(
+                f"groq transport error: {exc.__class__.__name__}", retryable=True
+            ) from exc
         if resp.status_code != 200:
-            raise ProviderError(f"groq HTTP {resp.status_code}")
+            retryable = resp.status_code == 429 or resp.status_code >= 500
+            raise ProviderError(f"groq HTTP {resp.status_code}", retryable=retryable)
         data = resp.json()
         try:
             text = data["choices"][0]["message"]["content"]
