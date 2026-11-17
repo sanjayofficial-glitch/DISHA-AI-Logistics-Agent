@@ -195,9 +195,12 @@ class DemoProvider(BaseProvider):
         }
 
         # --- explicit commands -------------------------------------------
-        if "remember that" in text or "yaad rakho" in text or "remember:" in text:
-            idx = max(text.find("remember that"), text.find("yaad rakho"), text.find("remember:"))
+        if "remember that" in text or "yaad rakho" in text or "remember:" in text or "monarakhiba" in text:
+            idx = max(text.find("remember that"), text.find("yaad rakho"), text.find("remember:"), text.find("monarakhiba"))
             fact = text[idx:].split("remember", 1)[-1].lstrip(" :").strip()
+            if len(fact) == len(text[idx:]):  # Odia/Hinglish fallback: strip keyword
+                kw = "monarakhiba" if "monarakhiba" in text else "yaad rakho"
+                fact = text.split(kw, 1)[-1].lstrip(" :").strip() or fact
             if fact:
                 intent["action"] = "remember"
                 intent["fact_text"] = fact
@@ -265,7 +268,7 @@ class DemoProvider(BaseProvider):
 
         # --- cancellation (gated write) -----------------------------------
         if any(k in text for k in ("cancel request", "cancel booking", "request cancel karo",
-                                   "booking cancel karo", "cancel karo")):
+                                   "booking cancel karo", "cancel karo", "bata karantu")):
             req_id = _extract_any_id(text)
             if not req_id or not req_id.startswith("REQ-"):
                 intent["action"] = "cancel_request"
@@ -331,7 +334,8 @@ class DemoProvider(BaseProvider):
 
         # --- explicit create-request command ------------------------------
         if any(k in text for k in ("create a request", "create request", "new request",
-                                   "request banao", "request create karo")):
+                                   "request banao", "request create karo",
+                                   "request karantu", "nisse karo")):
             origin, destination = _find_location(text)
             weight = _extract_weight(text)
             date_ = _extract_date(text)
@@ -407,6 +411,7 @@ class DemoProvider(BaseProvider):
             "load milega", "load chahiye", "find load", "return load", "backload",
             "empty truck", "meri gaadi", "load dhoondh", "load kahan",
             "wapsi ka load", "return trip", "return ka load",
+            "load khujantu", "bhar khujauthi",
         ))
         is_alternate = any(k in text for k in ("alternate", "another vehicle", "dusra truck",
                                                "alternative vehicle", "duusra vehicle"))

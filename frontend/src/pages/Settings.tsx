@@ -2,14 +2,23 @@ import { useCallback, useEffect, useState } from "react";
 import { PageHeader, Card, Badge, EmptyState } from "../ui/primitives";
 import { useAuthUser } from "../components/authContext";
 import { useNav } from "../appShell/AppShell";
-import { Info, ShieldCheck, Volume2, Trash2, Brain } from "lucide-react";
+import { Info, ShieldCheck, Volume2, Trash2, Brain, Languages } from "lucide-react";
 import { listFacts, deleteFact, Fact } from "../lib/api";
+
+export function getLanguage(): string {
+  return localStorage.getItem("disha_lang") ?? "en";
+}
+
+export function setLanguage(lang: string) {
+  localStorage.setItem("disha_lang", lang);
+}
 
 export function SettingsPage() {
   const user = useAuthUser();
   const { setSection } = useNav();
   const apiUrl = (import.meta.env.VITE_DISHA_API_URL as string | undefined) ?? "http://127.0.0.1:8000";
   const [facts, setFacts] = useState<Fact[]>([]);
+  const [lang, setLang] = useState<string>(getLanguage());
 
   const loadFacts = useCallback(async () => {
     try {
@@ -51,7 +60,22 @@ export function SettingsPage() {
 
         <Card className="p-4">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">Preferences</div>
-          <div className="space-y-2 text-sm">
+          <div className="space-y-3 text-sm">
+            <div className="flex items-start gap-2">
+              <Languages size={15} className="text-slate-400 mt-0.5" />
+              <div className="flex-1">
+                <div className="font-medium text-navy-900">Assistant language</div>
+                <select
+                  className="mt-1 w-full max-w-[220px] bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-disha-500"
+                  value={lang}
+                  onChange={(e) => { const v = e.target.value; setLang(v); setLanguage(v); }}
+                >
+                  <option value="en">English</option>
+                  <option value="hi">हिंदी (Hindi)</option>
+                  <option value="hinglish">Hinglish</option>
+                </select>
+              </div>
+            </div>
             <div className="flex items-start gap-2">
               <Volume2 size={15} className="text-slate-400 mt-0.5" />
               <div>

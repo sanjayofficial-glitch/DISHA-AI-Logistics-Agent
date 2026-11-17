@@ -14,7 +14,14 @@ import {
 } from "../lib/api";
 import { useVoice } from "../hooks/useVoice";
 import { DemoBadge } from "./DemoBadge";
+import { getLanguage } from "../pages/Settings";
 import { Check, X, Mic, MicOff, Send, Volume2, VolumeX, Trash2 } from "lucide-react";
+
+const PLACEHOLDERS: Record<string, string> = {
+  en: "Type your freight request… (Enter to send)",
+  hi: "अपना माल भेजने की जानकारी लिखें…",
+  hinglish: "Freight request type karo… (Enter bhejne ke liye)",
+};
 
 interface Msg {
   role: "user" | "assistant" | "system";
@@ -224,7 +231,7 @@ export function ChatView() {
                 }
               }}
               rows={2}
-              placeholder="Type your freight request… (Enter to send)"
+              placeholder={PLACEHOLDERS[getLanguage()] ?? PLACEHOLDERS.en}
               className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:border-disha-600/60"
             />
             <button
