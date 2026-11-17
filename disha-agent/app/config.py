@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     app_name: str = "DISHA"
     version: str = "0.1.0"
     environment: Literal["development", "test", "production"] = "development"
+    log_level: str = "INFO"
 
     # --- LLM providers (keys optional; demo mode when both absent) --------
     gemini_api_key: str | None = None

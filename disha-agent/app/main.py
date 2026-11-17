@@ -21,8 +21,12 @@ from . import events as events_mod
 from .auth import create_dev_token, require_token, require_user
 from .config import settings
 from .database import get_store
+from .logging_config import configure_logging, get_logger
 from .memory.store import MemoryStore
 from .service import service
+
+configure_logging()
+logger = get_logger(__name__)
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 
@@ -32,6 +36,15 @@ def _bootstrap() -> None:
     from .seed.bootstrap import ensure_demo_seeded
 
     ensure_demo_seeded()
+    logger.info(
+        "service_started",
+        extra={
+            "service": settings.app_name,
+            "version": settings.version,
+            "environment": settings.environment,
+            "demo_mode": settings.demo_mode,
+        },
+    )
 
 app.add_middleware(
     CORSMiddleware,

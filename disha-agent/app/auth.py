@@ -16,6 +16,9 @@ from fastapi import Depends, Header, HTTPException, Request
 from jwt import InvalidTokenError
 
 from .config import settings
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class TokenClaims:
@@ -28,6 +31,12 @@ class TokenClaims:
 
 def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
+
+
+def _reject(reason: str) -> None:
+    """Log the rejection reason (never the token) and raise 401."""
+    logger.warning("auth_rejected", extra={"reason": reason})
+    raise HTTPException(status_code=401, detail=reason)
 
 
 def create_dev_token(user_id: str, role: str = "authenticated", ttl_minutes: int = 60) -> str:
@@ -50,7 +59,7 @@ def create_dev_token(user_id: str, role: str = "authenticated", ttl_minutes: int
 def verify_token(token: str) -> TokenClaims:
     """Verify a Clerk->Supabase JWT. Raises HTTPException 401 on any failure."""
     if not token:
-        raise HTTPException(status_code=401, detail="missing bearer token")
+        _reject("missing bearer token")
     try:
         payload = jwt.decode(
             token,
@@ -63,25 +72,25 @@ def verify_token(token: str) -> TokenClaims:
             },
         )
     except InvalidTokenError:
-        raise HTTPException(status_code=401, detail="invalid or expired token")
+        _reject("invalid or expired token")
 
     if settings.clerk_expected_issuer and payload.get("iss") != settings.clerk_expected_issuer:
-        raise HTTPException(status_code=401, detail="unexpected issuer")
+        _reject("unexpected issuer")
     if settings.clerk_expected_audience and payload.get("aud") != settings.clerk_expected_audience:
-        raise HTTPException(status_code=401, detail="unexpected audience")
+        _reject("unexpected audience")
     if payload.get("role") != "authenticated":
-        raise HTTPException(status_code=401, detail="role=authenticated required")
+        _reject("role=authenticated required")
 
     sub = payload.get("sub")
     if not sub:
-        raise HTTPException(status_code=401, detail="missing sub claim")
+        _reject("missing sub claim")
     return TokenClaims(sub=str(sub), role="authenticated", iss=payload.get("iss"), aud=payload.get("aud"))
 
 
 def require_user(authorization: str | None = Header(default=None)) -> str:
     """FastAPI dependency -> verified user id (sub)."""
     if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="missing bearer token")
+        _reject("missing bearer token")
     token = authorization.split(" ", 1)[1].strip()
     claims = verify_token(token)
     return claims.sub
@@ -91,7 +100,7 @@ def require_token(authorization: str | None = Header(default=None)) -> tuple[str
     """FastAPI dependency -> (user_id, raw_jwt) so tool calls can forward the
     caller's JWT for RLS. The raw token is request-scoped and never stored."""
     if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="missing bearer token")
+        _reject("missing bearer token")
     token = authorization.split(" ", 1)[1].strip()
     claims = verify_token(token)
     return claims.sub, token

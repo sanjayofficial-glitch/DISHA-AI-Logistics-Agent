@@ -32,11 +32,14 @@ used.
 ## Tests
 
 ```bash
-.venv\Scripts\python -m pytest tests -q   # 39 tests
+.venv\Scripts\python -m pytest tests -q   # 43 tests
 ```
 
 ## Notable design points
 
+- **Structured logging:** every log line is one JSON object
+  (`app/logging_config.py`); sensitive keys (tokens, API keys, authorization
+  headers, secrets) are redacted before output.
 - **Approval gate:** the LangGraph workflow compiles with `interrupt_before=["execute"]`;
   every marketplace write requires `POST /approve`. The JWT is request-scoped and
   never persisted to checkpoints.

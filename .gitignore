@@ -43,3 +43,11 @@ frontend/vite-dev.log
 # Orca / agent scratch
 .orca-scratch/
 .orca-prompts/
+
+# Local SQLite files (demo store) — never commit binaries
+data/*.db
+data/*.db-shm
+data/*.db-wal
+disha-agent/data/*.db
+disha-agent/data/*.db-shm
+disha-agent/data/*.db-wal
