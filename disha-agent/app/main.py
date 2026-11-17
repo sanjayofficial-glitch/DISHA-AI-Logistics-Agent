@@ -10,6 +10,7 @@ import asyncio
 import collections
 import json
 import time
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -28,11 +29,10 @@ from .service import service
 configure_logging()
 logger = get_logger(__name__)
 
-app = FastAPI(title=settings.app_name, version=settings.version)
 
-
-@app.on_event("startup")
-def _bootstrap() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Startup/shutdown hooks (replaces deprecated on_event)."""
     from .seed.bootstrap import ensure_demo_seeded
 
     ensure_demo_seeded()
@@ -45,6 +45,10 @@ def _bootstrap() -> None:
             "demo_mode": settings.demo_mode,
         },
     )
+    yield
+
+
+app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
